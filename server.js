@@ -23,79 +23,93 @@ app.get("*", function (req, res) {
 // ------------------------------------------------------------------------------------
 
 class Player {
-  constructor(id, name, roomId) {
+  constructor(id, name, roomId, databaseId) {
     this.id = id;
     this.name = name;
     this.roomId = roomId;
     this.isReady = true;
+    this.databaseId = databaseId;
   }
 }
-
 class Lobby {
   constructor() {
-    // this.players = [];
-    this.games = [];
+    this.players = {};
+    this.games = {};
   }
 
-  checkGames(data) {
-    let gameIndex = this.games.findIndex((obj) => (obj.id = data.roomId));
-    if (gameIndex === -1) {
-      this.game = new Game(data.roomId);
-      // this.addPlayerToGame(data, this.game);
-      this.games.push(this.game);
-      console.log(this.games[0])
+  addNewPlayer(socketId, data) {
+    const player = new Player(
+      socketId,
+      data.name,
+      data.roomId,
+      data.databaseId
+    );
+    return player;
+  }
+
+  deletePlayerFromGame(id) {
+    try {
+      delete this.games[this.players[id]].players[id];
+      delete this.players[id];
+    } catch (err) {
+      console.log("Delete Player Error : ");
+      console.log(err.msg);
     }
   }
 
-  addPlayerToGame(data, game) {
-    const player = new Player(data.id, data.name, data.roomId);
-    console.log(data);
+  gameCheck(gameId, player) {
+    if (this.games[gameId]) {
+      this.games[gameId].players[player.id] = player;
+      this.players[player.id] = player.roomId;
+    } else {
+      this.games[gameId] = new Game(gameId);
+      this.games[gameId].players[player.id] = player;
+      this.players[player.id] = player.roomId;
+    }
   }
 
-  displayAllPlayers(data) {
-    let gameIndex = this.games.findIndex((obj) => (obj.id = data.roomId));
-    
-    return this.games[0].players;
-    
+  getRoomIdFromPlayer(id) {
+    try {
+      return this.players[id];
+    } catch (err) {
+      console.log("getRoomIdFromPlayer error", err);
+      console.log(err.msg);
+    }
+  }
+  displayRoomPlayers(roomId) {
+    try {
+      return this.games[roomId].players;
+    } catch (err) {
+      console.log("displayRoomPlayers error", err);
+    }
+  }
+
+  runGame(roomId) {
+    let players = this.games[roomId].players;
+    this.games[roomId].createGame(players);    
   }
 }
 
-/* #region  datas */
-let position = {
-  x: 5,
-  y: 5,
-  z: 5,
-};
-
-let color = {
-  red: 255,
-  green: 0,
-  b: 0,
-};
-
-let color2 = {
-  red: 100,
-  green: 100,
-  b: 0,
-};
 /* #endregion */
 
 /* #region Game Class */
 class Game {
   constructor(id) {
     this.id = id;
-    this.players = [];  
-    
+    this.players = {};
   }
 
-  createGame(){
+  createGame(players) {
     this.engine = new BABYLON.NullEngine();
     this.scene = this.createScene(this.engine);
-    this.cars = this.createCars(this.scene, color, position);
-    this.engine.runRenderLoop(() => {
+    this.cars = this.createCars(this.scene, players);
+    // console.log(this.cars[0].position);
+    this.engine.runRenderLoop(() => {      
       this.scene.render();
     });
   }
+
+  sendDataToClient() {}
 
   createScene() {
     this.scene = new BABYLON.Scene(this.engine);
@@ -144,17 +158,21 @@ class Game {
     );
   }
 
-  createCars(scene, color, position) {
+  createCars(scene, players) {
     let cars = [];
-    let positionX = 0;
-    for (let i = 0; i < 4; i++) {
-      const car = new Car(scene, color, position);
-      car.mesh.position.x = positionX;
-      positionX += 5;
+    let positionX = -5;
+    for (const [key, value] of Object.entries(players)) {
+      let car = new Car(scene, value);
+      car.mesh.position.x = positionX;       
       cars.push(car);
+      positionX +=5;
     }
     return cars;
   }
+
+  // getAllCars(){
+  //   console.log(this.scene)
+  // }
 
   engineResize() {
     this.engine.resize();
@@ -164,10 +182,9 @@ class Game {
 
 /* #region Car Class */
 class Car {
-  constructor(scene, color, position) {
-    this.id = "sockedId";
+  constructor(scene, player) {
     this.mesh = new BABYLON.MeshBuilder.CreateBox(
-      "car",
+      player.id,
       {
         height: 0.5,
         depth: 1,
@@ -176,19 +193,27 @@ class Car {
       scene
     );
     this.mesh.metadata = {};
-    this.mesh.metadata.value = 5;
+    this.mesh.metadata.vehicle = true;
+    this.mesh.metadata.isReady = player.isReady;
     this.carMaterial = new BABYLON.StandardMaterial("carMaterial", scene);
-    this.carMaterial.diffuseColor = new BABYLON.Color3(
-      color.red,
-      color.blue,
-      color.green
-    );
+    this.carMaterial.diffuseColor = new BABYLON.Color3(255, 0, 0);
     this.mesh.material = this.carMaterial;
-    this.mesh.position.x = position.x;
-    this.mesh.position.y = position.y;
-    this.mesh.position.z = position.z;
     this.mesh.speed = 2;
     this.mesh.rotationSpeed = 0.04;
+    this.mesh.frontVector = new BABYLON.Vector3(0, 0, 1);
+  }
+
+  updatePosition() {
+    if (this.state.isWPressed) {
+      this.mesh.moveWithCollisions(
+        this.mesh.frontVector.multiplyByFloats(
+          1 * this.mesh.speed,
+          1 * this.mesh.speed,
+          1 * this.mesh.speed
+        )
+      );
+      console.log(this.mesh.position);
+    }
   }
 
   updateColor(color) {
@@ -212,13 +237,26 @@ let lobby = new Lobby();
 io.on("connection", connected);
 
 function connected(socket) {
-  socket.on('joinRoom',(data)=>{
-    let player = new Player(socket.id,data.name,data.roomId);
-    lobby.checkGames(player.roomId);
-   
-  })
+  socket.on("joinRoom", (init) => {
+    const player = lobby.addNewPlayer(socket.id, init);
+    lobby.gameCheck(init.roomId, player);
+    socket.join(player.roomId);
+    io.to(player.roomId).emit(
+      "updatePlayers",
+      lobby.displayRoomPlayers(player.roomId)
+    );
+  });
 
+  socket.on("ready", () => {
+    let room = lobby.getRoomIdFromPlayer(socket.id);
+    lobby.runGame(room);   
+    io.to(room).emit("ready",lobby.displayRoomPlayers(room));
   
+  });
 
-  socket.on("disconnected", () => {});
+  socket.on("disconnect", () => {
+    let room = lobby.getRoomIdFromPlayer(socket.id);
+    lobby.deletePlayerFromGame(socket.id);
+    io.to(room).emit("updatePlayers", lobby.displayRoomPlayers(room));
+  });
 }

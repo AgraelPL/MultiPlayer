@@ -1,84 +1,131 @@
-
-
 const socket = io("http://localhost:3000");
 
-let initialData = function (name, roomId) {
+let initialData = function (name, roomId, databaseId) {
   this.name = name;
   this.roomId = roomId;
+  this.databaseId = databaseId;
 };
 
-let init = new initialData("thomas", "1111");
+function randomInteger(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
-class Player{
-  constructor(id,name,roomId) {
+let randomNumber = randomInteger(100, 500);
+
+let init = new initialData("thomas", "1111", randomNumber);
+
+class Player {
+  constructor(id, name, roomId, databaseId, enabled) {
     this.id = id;
     this.name = name;
     this.roomId = roomId;
+    this.enabled = enabled;
+    this.databaseId = databaseId;
     this.isReady = true;
-  }  
+  }
 }
 
-class Lobby{
-  constructor(){
-    this.players= [];
+class Lobby {
+  constructor() {
+    this.players = {};
+    this.game;
   }
-  addPlayer(data){
-    const player = new Player(data.id,data.name,data.roomId);
-    this.players.push(player)
+
+  gameStart(players) {
+    this.game = new Game(players);
+  }
+
+  updatePlayers(data) {
+    let arr = {};
+    for (const [key, value] of Object.entries(data)) {
+      let database = "";
+      let enabled = false;
+      if (value.databaseId === init.databaseId) {
+        database = value.databaseId;
+        enabled = true;
+      } else {
+        database = "another player";
+      }
+      let player = new Player(key, value.name, value.roomId, database, enabled);
+      arr[player.id] = player;
+    }
+    this.players = arr;
+    console.log(this.players);
   }
 }
 
 socket.emit("joinRoom", init);
+socket.on("updatePlayers", (data) => {
+  lobby.updatePlayers(data);
+});
 
-socket.on('updatePlayers',(data)=>{
-  console.log(data);
-})
-
-let position = {
-  x: 5,
-  y: 5,
-  z: 5,
-};
-
-let color = {
-  red: 255,
-  green: 0,
-  b: 0,
-};
-
-let color2 = {
-  red: 100,
-  green: 100,
-  b: 0,
-};
+socket.on("ready", (players) => {
+  lobby.gameStart(lobby.players);
+});
 
 /* #region Game Class */
 class Game {
-  constructor() {
-
-    // Babylon enviroment setup
+  constructor(players) {
     this.canvas = document.getElementById("renderCanvas");
     this.engine = new BABYLON.Engine(this.canvas, true);
-    this.scene = this.createScene(this.engine, this.canvas);
-    this.cars = this.createCars(this.scene, color, position);
-    this.followCamera = this.createFollowCamera(this.scene,this.cars[0].mesh);
-   
-    
+    this.scene = new BABYLON.Scene(this.engine);
+    this.scene.collisionsEnabled = true;
+    this.cars = this.createCars(this.scene, players);
+    // this.freeCamera = this.createFreeCamera(this.scene);
+
+    this.createLight(this.scene);
+    this.createFollowCamera(this.scene, players);
+
+    //this.followCamera = this.createFollowCamera(this.scene, this.cars[0].mesh);
+    // this.freeCamera = this.createFreeCamera(this.scene, this.canvas);
+
     this.engine.runRenderLoop(() => {
-      this.cars[3].updateColor(color2);        
       this.scene.render();
     });
   }
 
-  createScene() {
-    this.scene = new BABYLON.Scene(this.engine);
-    this.scene.collisionsEnabled = true;
-    // this.freeCamera = this.createFreeCamera(this.scene);    
-    this.createLight(this.scene);
+  createFollowCamera(scene, players) {
+    let targetPlayer;
+    console.log(this.cars);
+    for (const [key, value] of Object.entries(players)) {
+      if (value.enabled === true) {
+        targetPlayer = key;
+      }
+    }
+    this.camera = new BABYLON.FollowCamera(
+      "playerCamera",
+      this.cars[targetPlayer].mesh.position,
+      scene,
+      this.cars[targetPlayer].mesh
+    );
+    this.camera.radius = 10; // how far from the object to follow
+    this.camera.heightOffset = 3; // how high above the object to place camera
+    this.camera.rotationOffset = 180; // the viewing angle
+    this.camera.cameraAccelatrion = 0.5; // how fast camera to move
+    this.camera.maxCameraSpeed = 50; // speed limit
 
-    return this.scene;
+    return this.camera;
   }
 
+  /* #region  follow camera */
+  // createFollowCamera(scene, target) {
+  //   this.camera = new BABYLON.FollowCamera(
+  //     "playerFollowCamera",
+  //     target.position,
+  //     scene,
+  //     target
+  //   );
+  //   this.camera.radius = 10; // how far from the object to follow
+  //   this.camera.heightOffset = 3; // how high above the object to place camera
+  //   this.camera.rotationOffset = 180; // the viewing angle
+  //   this.camera.cameraAccelatrion = 0.5; // how fast camera to move
+  //   this.camera.maxCameraSpeed = 50; // speed limit
+
+  //   return this.camera;
+  // }
+  /* #endregion */
+
+  /* #region  free camera */
   createFreeCamera(scene, canvas) {
     this.camera = new BABYLON.FreeCamera(
       "freeCamera",
@@ -103,18 +150,9 @@ class Game {
 
     return this.camera;
   }
+  /* #endregion */
 
-  createFollowCamera(scene,target){
-    this.camera = new BABYLON.FollowCamera('playerFollowCamera',target.position,scene,target);
-    this.camera.radius = 10; // how far from the object to follow
-    this.camera.heightOffset = 3 // how high above the object to place camera
-    this.camera.rotationOffset = 180 // the viewing angle
-    this.camera.cameraAccelatrion = 0.5 // how fast camera to move
-    this.camera.maxCameraSpeed = 50; // speed limit
-
-    return this.camera
-  }
-
+  /* #region  light */
   createLight(scene) {
     let ligh0 = new BABYLON.DirectionalLight(
       "dir0",
@@ -127,18 +165,21 @@ class Game {
       scene
     );
   }
+  /* #endregion */
 
-  createCars(scene, color, position) {
-    let cars = [];
-    let positionX = 0;
-    for (let i = 0; i < 4; i++) {
-      const car = new Car(scene, color, position);
+  /* #region  cars */
+  createCars(scene, players) {
+    let cars = {};
+    let positionX = -5;
+    for (const [key, value] of Object.entries(players)) {
+      let car = new Car(scene, value);
       car.mesh.position.x = positionX;
+      cars[key] = car;
       positionX += 5;
-      cars.push(car);
     }
     return cars;
   }
+  /* #endregion */
 
   engineResize() {
     this.engine.resize();
@@ -147,12 +188,10 @@ class Game {
 /* #endregion */
 
 /* #region Car Class */
-
 class Car {
-  constructor(scene, color, position) {
-    this.id = "sockedId";
+  constructor(scene, player) {
     this.mesh = new BABYLON.MeshBuilder.CreateBox(
-      "car",
+      player.id,
       {
         height: 0.5,
         depth: 1,
@@ -160,25 +199,20 @@ class Car {
       },
       scene
     );
-    this.mesh.metadata = {};
-    this.mesh.metadata.value = 5;
     this.carMaterial = new BABYLON.StandardMaterial("carMaterial", scene);
-    console.log(this.carMaterial);
-    this.carMaterial.diffuseColor = new BABYLON.Color3(
-      color.red,
-      color.blue,
-      color.green
-    );
+
+    this.carMaterial.diffuseColor = new BABYLON.Color3(255, 0, 0);
     this.mesh.material = this.carMaterial;
-    this.mesh.position.x = position.x;
-    this.mesh.position.y = position.y;
-    this.mesh.position.z = position.z;
     this.mesh.speed = 2;
     this.mesh.rotationSpeed = 0.04;
   }
-  
+
+  /* #region  updateColor */
   updateColor(color) {
-    let newCarMaterial = new BABYLON.StandardMaterial("newCarMaterial", this.scene);
+    let newCarMaterial = new BABYLON.StandardMaterial(
+      "newCarMaterial",
+      this.scene
+    );
     newCarMaterial.diffuseColor = new BABYLON.Color3(
       color.red,
       color.blue,
@@ -187,49 +221,63 @@ class Car {
 
     this.mesh.material = newCarMaterial;
   }
+  /* #endregion */
 }
 /* #endregion */
 
 /* #region  Keybord Class */
-class Keyboard {
-  static init() {
-    document.addEventListener("keydown", function (event) {
-      if (event.key == "w" || event.key == "W") {
-        console.log("w");
-      }
-      if (event.key == "s" || event.key == "S") {
-        isSPressed = true;
-      }
-      if (event.key == "a" || event.key == "A") {
-        isAPressed = true;
-      }
-      if (event.key == "d" || event.key == "D") {
-        isDPressed = true;
-      }
-    });
 
-    document.addEventListener("keyup", function (event) {
-      if (event.key == "w" || event.key == "W") {
-      }
-      if (event.key == "s" || event.key == "S") {
-        isSPressed = false;
-      }
-      if (event.key == "a" || event.key == "A") {
-        isAPressed = false;
-      }
-      if (event.key == "d" || event.key == "D") {
-        isDPressed = false;
-      }
-    });
-  }
-}
+// class Keyboard {
+//   constructor() {
+//     this.isWPressed = false;
+//     this.isSPressed = false;
+//     this.isAPressed = false;
+//     this.isDPressed = false;
+//   }
+// }
+
 /* #endregion */
 
-let game = new Game();
-// Keyboard.init();
+let lobby = new Lobby();
 
-window.addEventListener("resize", game.engineResize());
+// let keyboard = new Keyboard();
+/* #region  keyup/down listeners */
 
+// document.addEventListener("keydown", function (event) {
+//   if (event.key == "w" || event.key == "W") {
+//     keyboard.isWPressed = true;
+//   }
+//   if (event.key == "s" || event.key == "S") {
+//     keyboard.isSPressed = true;
+//   }
+//   if (event.key == "a" || event.key == "A") {
+//     keyboard.isAPressed = true;
+//   }
+//   if (event.key == "d" || event.key == "D") {
+//     keyboard.isDPressed = true;
+//   }
+// });
 
+// document.addEventListener("keyup", function (event) {
+//   if (event.key == "w" || event.key == "W") {
+//     keyboard.isWPressed = false;
+//   }
+//   if (event.key == "s" || event.key == "S") {
+//     keyboard.isSPressed = false;
+//   }
+//   if (event.key == "a" || event.key == "A") {
+//     keyboard.isAPressed = false;
+//   }
+//   if (event.key == "d" || event.key == "D") {
+//     keyboard.isDPressed = false;
+//   }
+// });
+/* #endregion */
 
+let createBtn = document.getElementById("createGame");
 
+createBtn.addEventListener("click", () => {
+  socket.emit("ready");
+});
+
+window.addEventListener("resize", lobby.game.engineResize());
